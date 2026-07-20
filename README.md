@@ -60,10 +60,23 @@ on the estimate — see **Roof ridge options** below.
 
 ### Roadmap
 
-For complex buildings, each `azimuths` group (see the API response below) already
-carries a bearing and a share of the building's perimeter — the groundwork for
-reporting multiple azimuths with roof-area fractions, not just the single
-dominant one.
+- For complex buildings, each `azimuths` group (see the API response below)
+  already carries a bearing and a share of the building's perimeter — the
+  groundwork for reporting multiple azimuths with roof-area fractions, not
+  just the single dominant one.
+- **TODO: improve ridge detection and orientation estimation.** Even with the
+  higher-resolution Belgian NGI imagery, `ridge.py`'s Canny/Hough approach
+  remains best-effort and often finds nothing on typical small roofs (see
+  "Known limitations"). Worth exploring: better CV tuning, a genuinely
+  different signal (e.g. LIDAR-derived elevation data, where a ridge is
+  literally the local height maximum rather than an inferred color/shadow
+  edge), or improving the footprint-edge fallback heuristic itself.
+- **TODO: reduce timeouts from `https://overpass-api.de/api/interpreter`.**
+  The public instance was frequently slow, rate-limited, or fully down during
+  development, which surfaces to users as a 404/504 error rather than a
+  result. Worth exploring: a fallback mirror (e.g. `overpass.kumi.systems`),
+  a self-hosted Overpass instance, or a different footprint data source
+  entirely for better reliability.
 
 ## Setup
 
