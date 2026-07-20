@@ -19,8 +19,10 @@ roof ridge is a line, not a direction, azimuths are reported in `[0, 180)` — e
    endpoint, not the plain JSON endpoint), a **best-effort ridge-line detector**
    (edge + line detection on the tile) refines that estimate when it finds a
    confident, corroborated line — otherwise the footprint heuristic stands.
-5. Render a small satellite image (Esri World Imagery) with the footprint outline
-   and azimuth line drawn on it.
+5. Render a small satellite image with the footprint outline and azimuth line
+   drawn on it — Belgium's national NGI orthophoto service for Belgian addresses
+   (much higher resolution: ~15cm/pixel in Flanders, ~25cm/pixel in Wallonia),
+   falling back to Esri World Imagery elsewhere or if NGI is unavailable.
 
 You can also tell the app what you already know about the roof instead of relying
 on the estimate — see **Roof ridge options** below.
@@ -30,10 +32,12 @@ on the estimate — see **Roof ridge options** below.
 - The footprint-edge heuristic is an approximation. It's wrong whenever a roof's
   ridge doesn't run along the building's longest wall (common for e.g. some
   terraced/row houses) — use the manual override in that case.
-- Ridge-line detection runs on satellite tiles at roughly 0.3–1 m/pixel. Small
-  residential roofs are only a few dozen pixels wide at that resolution, so
-  detection is intentionally conservative and will often find nothing (falling
-  back to the footprint heuristic) rather than guess.
+- Ridge-line detection runs on whatever satellite imagery was fetched. For
+  Belgian addresses that's NGI's orthophoto service (~15–25 cm/pixel); Esri's
+  imagery elsewhere is typically ~0.3–1 m/pixel. Small residential roofs are
+  only a few dozen pixels wide even at the better resolution, so detection is
+  intentionally conservative and will often find nothing (falling back to the
+  footprint heuristic) rather than guess.
 - OpenStreetMap building-footprint coverage and accuracy varies by region. It's
   particularly strong in Belgium (Flanders' buildings were bulk-imported from the
   official GRB reference dataset) and generally good across Europe.
@@ -184,6 +188,7 @@ azimuth/
   orientation.py       Footprint -> azimuth (edge bearings, grouping, manual override)
   ridge.py              Image-based ridge-line detection (best-effort refinement)
   imagery.py             Satellite tile fetch + stitch (Esri World Imagery)
+  wms.py                  Higher-res Belgian orthophoto (NGI WMS), preferred in-region
   render.py               Draws the footprint outline + azimuth line
   pipeline.py              Orchestrates the above, with caching
   api.py                    Starlette routes for the JSON/PNG API
@@ -192,4 +197,6 @@ azimuth/
 ## Attribution
 
 - Building data and geocoding: © OpenStreetMap contributors (Nominatim, Overpass).
-- Satellite imagery: Esri, Maxar, Earthstar Geographics, and the GIS User Community.
+- Satellite imagery: Esri, Maxar, Earthstar Geographics, and the GIS User Community
+  (elsewhere), or NGI (Nationaal Geografisch Instituut / Institut Géographique
+  National) for Belgian addresses.

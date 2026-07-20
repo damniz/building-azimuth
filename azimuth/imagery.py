@@ -74,7 +74,7 @@ def project_ring_to_pixels(
     ]
 
 
-def _pad_bbox(
+def pad_bbox(
     bbox_latlon: tuple[float, float, float, float], pad_m: float
 ) -> tuple[float, float, float, float]:
     min_lat, min_lon, max_lat, max_lon = bbox_latlon
@@ -107,7 +107,7 @@ def fetch_stitched_image(
     user_agent: str = "building-azimuth/0.1",
 ) -> StitchedImage:
     """Fetch and stitch tiles covering `bbox_latlon` (min_lat, min_lon, max_lat, max_lon)."""
-    padded = _pad_bbox(bbox_latlon, pad_m)
+    padded = pad_bbox(bbox_latlon, pad_m)
     min_lat, min_lon, max_lat, max_lon = padded
 
     last_error: Exception | None = None
