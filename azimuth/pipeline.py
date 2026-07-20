@@ -21,6 +21,7 @@ from . import imagery as imagery_mod
 from . import orientation as orientation_mod
 from . import render as render_mod
 from . import ridge as ridge_mod
+from . import wms as wms_mod
 
 USER_AGENT = "building-azimuth/0.1 (+contact: damien.nizery@lastrolabe.eu)"
 CACHE_TTL_SECONDS = 86400
@@ -109,7 +110,21 @@ def compute_building_azimuth(address: str, manual_orientation: str | None = None
     bbox_diagonal_m = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
     pad_m = max(8.0, 0.25 * bbox_diagonal_m)
 
-    stitched = imagery_mod.fetch_stitched_image(bbox_latlon, pad_m=pad_m, user_agent=USER_AGENT)
+    # NGI's Belgian orthophoto WMS is much higher resolution than Esri there
+    # (and Esri's z20/21 coverage turned out to be unreliable placeholder
+    # tiles in testing) -- prefer it in-region, falling back to Esri on any
+    # failure (including addresses outside Belgium, where it's skipped).
+    stitched = None
+    image_attribution = imagery_mod.ESRI_ATTRIBUTION
+    if wms_mod.is_in_belgium(located.lat, located.lon):
+        try:
+            stitched = wms_mod.fetch_wms_image(bbox_latlon, pad_m=pad_m, user_agent=USER_AGENT)
+            image_attribution = wms_mod.NGI_ATTRIBUTION
+        except wms_mod.WmsError:
+            stitched = None
+    if stitched is None:
+        stitched = imagery_mod.fetch_stitched_image(bbox_latlon, pad_m=pad_m, user_agent=USER_AGENT)
+        image_attribution = imagery_mod.ESRI_ATTRIBUTION
 
     # An explicit user choice always wins -- it reflects direct knowledge of
     # the real roof, which beats an uncertain automatic detection. Only look
@@ -137,5 +152,5 @@ def compute_building_azimuth(address: str, manual_orientation: str | None = None
         roof_orientation_hint=located.roof_orientation_hint,
         ridge_detected=ridge_detected,
         image=image,
-        image_attribution=imagery_mod.ESRI_ATTRIBUTION,
+        image_attribution=image_attribution,
     )
