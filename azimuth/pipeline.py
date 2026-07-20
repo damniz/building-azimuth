@@ -20,6 +20,7 @@ from . import geometry
 from . import imagery as imagery_mod
 from . import orientation as orientation_mod
 from . import render as render_mod
+from . import ridge as ridge_mod
 
 USER_AGENT = "building-azimuth/0.1 (+contact: damien.nizery@lastrolabe.eu)"
 CACHE_TTL_SECONDS = 86400
@@ -33,6 +34,8 @@ class AzimuthResult:
     lon: float
     primary: orientation_mod.EdgeBearing
     groups: list[orientation_mod.AzimuthGroup]
+    roof_orientation_hint: str | None  # "along"/"across"/"flat" if the user overrode it, else None
+    ridge_detected: bool  # True if a visible roof ridge line was detected in the image
     image: Image.Image | None
     image_attribution: str | None
 
@@ -45,10 +48,11 @@ class _LocatedBuilding:
     ring_latlon: list[tuple[float, float]]
     primary: orientation_mod.EdgeBearing
     groups: list[orientation_mod.AzimuthGroup]
+    roof_orientation_hint: str | None
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def _locate_building(address: str) -> _LocatedBuilding:
+def _locate_building(address: str, manual_orientation: str | None = None) -> _LocatedBuilding:
     geocoded = geocode_mod.geocode_address(address, user_agent=USER_AGENT)
     building = footprint_mod.find_building(geocoded.lat, geocoded.lon, user_agent=USER_AGENT)
 
@@ -57,6 +61,12 @@ def _locate_building(address: str) -> _LocatedBuilding:
     primary = orientation_mod.dominant_azimuth(edges)
     groups = orientation_mod.group_azimuths(edges)
 
+    # Default is always the longest-edge heuristic: OSM's roof:orientation tag turned
+    # out not to be reliable enough to auto-flip this (real roofs don't consistently
+    # follow along/across relative to the footprint). Only an explicit, user-supplied
+    # choice changes the result.
+    primary, roof_orientation_hint = orientation_mod.apply_roof_orientation_hint(primary, manual_orientation)
+
     return _LocatedBuilding(
         display_name=geocoded.display_name,
         lat=geocoded.lat,
@@ -64,12 +74,13 @@ def _locate_building(address: str) -> _LocatedBuilding:
         ring_latlon=building.ring_latlon,
         primary=primary,
         groups=groups,
+        roof_orientation_hint=roof_orientation_hint,
     )
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def compute_orientation(address: str) -> AzimuthResult:
-    located = _locate_building(address)
+def compute_orientation(address: str, manual_orientation: str | None = None) -> AzimuthResult:
+    located = _locate_building(address, manual_orientation)
     return AzimuthResult(
         address=address,
         display_name=located.display_name,
@@ -77,14 +88,16 @@ def compute_orientation(address: str) -> AzimuthResult:
         lon=located.lon,
         primary=located.primary,
         groups=located.groups,
+        roof_orientation_hint=located.roof_orientation_hint,
+        ridge_detected=False,
         image=None,
         image_attribution=None,
     )
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def compute_building_azimuth(address: str) -> AzimuthResult:
-    located = _locate_building(address)
+def compute_building_azimuth(address: str, manual_orientation: str | None = None) -> AzimuthResult:
+    located = _locate_building(address, manual_orientation)
 
     lats = [p[0] for p in located.ring_latlon]
     lons = [p[1] for p in located.ring_latlon]
@@ -97,15 +110,32 @@ def compute_building_azimuth(address: str) -> AzimuthResult:
     pad_m = max(8.0, 0.25 * bbox_diagonal_m)
 
     stitched = imagery_mod.fetch_stitched_image(bbox_latlon, pad_m=pad_m, user_agent=USER_AGENT)
-    image = render_mod.draw_footprint_and_azimuth(stitched, located.ring_latlon, located.primary)
+
+    # An explicit user choice always wins -- it reflects direct knowledge of
+    # the real roof, which beats an uncertain automatic detection. Only look
+    # for a ridge line when nothing was manually specified (a "flat" roof
+    # explicitly has no ridge to find, so detection is skipped for it too).
+    primary = located.primary
+    ridge_detected = False
+    if manual_orientation not in ("along", "across", "flat"):
+        ring_px = imagery_mod.project_ring_to_pixels(located.ring_latlon, stitched)
+        detected_line = ridge_mod.detect_ridge_line(stitched.image, ring_px)
+        if detected_line is not None:
+            mpp = imagery_mod.meters_per_pixel(located.lat, stitched.zoom)
+            primary = ridge_mod.ridge_azimuth(detected_line, mpp)
+            ridge_detected = True
+
+    image = render_mod.draw_footprint_and_azimuth(stitched, located.ring_latlon, primary)
 
     return AzimuthResult(
         address=address,
         display_name=located.display_name,
         lat=located.lat,
         lon=located.lon,
-        primary=located.primary,
+        primary=primary,
         groups=located.groups,
+        roof_orientation_hint=located.roof_orientation_hint,
+        ridge_detected=ridge_detected,
         image=image,
         image_attribution=imagery_mod.ESRI_ATTRIBUTION,
     )

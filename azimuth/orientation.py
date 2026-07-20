@@ -63,6 +63,30 @@ def dominant_azimuth(edges: list[EdgeBearing]) -> EdgeBearing:
     return max(edges, key=lambda e: e.length_m)
 
 
+def apply_roof_orientation_hint(
+    primary: EdgeBearing, roof_orientation: str | None
+) -> tuple[EdgeBearing, str | None]:
+    """Override the footprint-edge heuristic with an explicit, user-supplied
+    choice. `along` confirms the default assumption (ridge parallel to the
+    longer edge, i.e. what `dominant_azimuth` already returns) -- no change.
+    `across` means the ridge runs parallel to the *shorter* edge -- rotate by
+    90 degrees. `flat` means the building is known to have no ridge -- the
+    standard footprint-edge heuristic still stands (it's the best available
+    signal for a reference orientation), this just marks that ridge detection
+    shouldn't be attempted for it (see pipeline.py).
+
+    Returns the (possibly corrected) bearing, plus the value that was
+    actually applied (None if absent or an unrecognized value, in which case
+    the longest-edge default stands).
+    """
+    if roof_orientation == "across":
+        rotated = EdgeBearing(bearing_deg=(primary.bearing_deg + 90.0) % 180.0, length_m=primary.length_m)
+        return rotated, "across"
+    if roof_orientation in ("along", "flat"):
+        return primary, roof_orientation
+    return primary, None
+
+
 def _circular_diff_deg(a: float, b: float, modulus: float = 180.0) -> float:
     d = abs(a - b) % modulus
     return min(d, modulus - d)

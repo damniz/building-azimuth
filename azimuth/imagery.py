@@ -47,6 +47,22 @@ def lonlat_to_pixel(lon: float, lat: float, zoom: int) -> tuple[float, float]:
     return x, y
 
 
+def meters_per_pixel(lat: float, zoom: int) -> float:
+    """Ground resolution of a Web Mercator tile at `lat`/`zoom` (standard formula)."""
+    return (156543.03392 * math.cos(math.radians(lat))) / (2**zoom)
+
+
+def project_ring_to_pixels(
+    ring_latlon: list[tuple[float, float]], stitched: StitchedImage
+) -> list[tuple[float, float]]:
+    """Project a (lat, lon) ring into pixel coordinates within `stitched.image`."""
+    ox, oy = stitched.canvas_origin_px
+    return [
+        (px - ox, py - oy)
+        for px, py in (lonlat_to_pixel(lon, lat, stitched.zoom) for lat, lon in ring_latlon)
+    ]
+
+
 def _pad_bbox(
     bbox_latlon: tuple[float, float, float, float], pad_m: float
 ) -> tuple[float, float, float, float]:

@@ -25,9 +25,15 @@ def _get_address(request: Request) -> str:
     return address
 
 
+def _get_manual_orientation(request: Request) -> str | None:
+    value = request.query_params.get("roof_orientation")
+    return value if value in ("along", "across", "flat") else None
+
+
 def get_azimuth(request: Request) -> JSONResponse:
     address = _get_address(request)
-    result = compute_orientation(address)
+    manual_orientation = _get_manual_orientation(request)
+    result = compute_orientation(address, manual_orientation)
     return JSONResponse(
         {
             "address": result.address,
@@ -35,7 +41,7 @@ def get_azimuth(request: Request) -> JSONResponse:
             "lat": result.lat,
             "lon": result.lon,
             "azimuth_deg": result.primary.bearing_deg,
-            "azimuth_deg_alt": (result.primary.bearing_deg + 180.0) % 360.0,
+            "roof_orientation_hint": result.roof_orientation_hint,
             "azimuths": [
                 {"azimuth_deg": group.bearing_deg, "length_fraction": group.length_fraction}
                 for group in result.groups
@@ -46,7 +52,8 @@ def get_azimuth(request: Request) -> JSONResponse:
 
 def get_azimuth_image(request: Request) -> Response:
     address = _get_address(request)
-    result = compute_building_azimuth(address)
+    manual_orientation = _get_manual_orientation(request)
+    result = compute_building_azimuth(address, manual_orientation)
     buffer = BytesIO()
     result.image.save(buffer, format="PNG")
     return Response(content=buffer.getvalue(), media_type="image/png")
