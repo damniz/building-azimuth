@@ -89,3 +89,6 @@ shouldn't be reused for anything spanning a larger area.
 Before committing new changes, always propose a corresponding update to `README.md` — or explicitly explain why
 the change doesn't warrant one (e.g. a pure refactor, an internal bugfix with no user-visible or API-visible
 effect). Don't skip this step silently.
+
+At the start of a new session in this repo, check the README's "Roadmap" section for outstanding TODOs and
+proactively propose tackling one, rather than waiting to be asked.
