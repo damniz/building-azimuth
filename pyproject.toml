@@ -1,0 +1,11 @@
+[project]
+name = "building-azimuth"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "mercantile>=1.2.1",
+    "pillow>=12.3.0",
+    "requests>=2.34.2",
+    "streamlit>=1.59.2",
+]
