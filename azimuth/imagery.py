@@ -3,9 +3,11 @@
 Uses Esri World Imagery's keyless tile endpoint (works today for hobby/OSS
 use, the same one countless Leaflet projects hit directly with no auth,
 though it isn't formally guaranteed free -- attribution is shown in the UI as
-cheap insurance). Falls back through zoom levels since z=20+ coverage is
-patchy and city-specific; z=19 is the practical ceiling almost everywhere
-useful buildings would be.
+cheap insurance). Tries the highest zoom first and falls back downward: z=20+
+("Clarity") coverage is patchy and city-specific, but where it exists it's a
+real resolution win -- worth attempting, since ridge-line detection (ridge.py)
+is starved for pixels on typical small roofs. z=19 remains the practical
+ceiling almost everywhere else.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from dataclasses import dataclass
 from io import BytesIO
 
 import mercantile
+import numpy as np
 import requests
 from PIL import Image
 
@@ -25,6 +28,14 @@ ESRI_TILE_URL = (
 ESRI_ATTRIBUTION = "Imagery: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
 
 _METERS_PER_DEGREE = 111_319.5
+
+# Esri serves "no imagery here yet" tiles (a flat gray "Map data not yet
+# available" graphic) as an ordinary HTTP 200, not an error status -- so a
+# status-code check alone silently accepts them as real imagery. Real
+# satellite tiles have far more pixel variance than this placeholder
+# (observed: real tiles std >= ~44, placeholder tiles std ~= 5); this
+# threshold leaves a wide margin on both sides.
+_PLACEHOLDER_STD_THRESHOLD = 15.0
 
 
 class ImageryError(Exception):
@@ -73,18 +84,26 @@ def _pad_bbox(
     return (min_lat - dlat, min_lon - dlon, max_lat + dlat, max_lon + dlon)
 
 
+def _is_placeholder_tile(image: Image.Image) -> bool:
+    gray = np.array(image.convert("L"), dtype=np.float64)
+    return gray.std() < _PLACEHOLDER_STD_THRESHOLD
+
+
 def _fetch_tile(z: int, x: int, y: int, user_agent: str, timeout: float = 10.0) -> Image.Image:
     url = ESRI_TILE_URL.format(z=z, y=y, x=x)
     response = requests.get(url, headers={"User-Agent": user_agent}, timeout=timeout)
     if response.status_code != 200:
         raise ImageryError(f"Tile {z}/{x}/{y} unavailable (HTTP {response.status_code}).")
-    return Image.open(BytesIO(response.content)).convert("RGB")
+    image = Image.open(BytesIO(response.content)).convert("RGB")
+    if _is_placeholder_tile(image):
+        raise ImageryError(f"Tile {z}/{x}/{y} has no imagery yet (placeholder tile).")
+    return image
 
 
 def fetch_stitched_image(
     bbox_latlon: tuple[float, float, float, float],
     pad_m: float,
-    zoom_candidates: tuple[int, ...] = (19, 18, 17),
+    zoom_candidates: tuple[int, ...] = (21, 20, 19, 18, 17),
     user_agent: str = "building-azimuth/0.1",
 ) -> StitchedImage:
     """Fetch and stitch tiles covering `bbox_latlon` (min_lat, min_lon, max_lat, max_lon)."""
