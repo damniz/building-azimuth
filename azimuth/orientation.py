@@ -92,6 +92,25 @@ def _circular_diff_deg(a: float, b: float, modulus: float = 180.0) -> float:
     return min(d, modulus - d)
 
 
+def to_directional_azimuth(bearing_deg: float) -> float:
+    """Convert a ridge/wall-line bearing ([0, 180), the convention used
+    everywhere else in this module) into the full-circle azimuth this app
+    reports to users and the API.
+
+    A ridge line itself isn't what a solar panel faces -- the roof *slopes*
+    do, and those run perpendicular to the ridge, one on each side. Rotate by
+    90 degrees to get that perpendicular line, then resolve its two possible
+    full-circle directions by picking whichever is closer to south (180
+    degrees), the convention this app has settled on for solar-relevance.
+    """
+    perpendicular = (bearing_deg + 90.0) % 180.0
+    candidate_a = perpendicular
+    candidate_b = (perpendicular + 180.0) % 360.0
+    if _circular_diff_deg(candidate_a, 180.0, 360.0) <= _circular_diff_deg(candidate_b, 180.0, 360.0):
+        return candidate_a
+    return candidate_b
+
+
 def _circular_mean_deg(bearings_deg: list[float], weights: list[float]) -> float:
     # Double the angle to fold the mod-180 ambiguity into a full mod-360
     # circle, average as vectors, then halve -- avoids naive averaging

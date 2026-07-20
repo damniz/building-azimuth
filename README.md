@@ -1,28 +1,38 @@
 # building-azimuth
 
-Find the main orientation (azimuth) of a building's roof from its address — as a
-Streamlit web app and as a JSON/PNG API, both served from the same app.
+Find the compass direction a building's roof *faces* from its address — the
+azimuth that matters for solar panel siting — as a Streamlit web app and as a
+JSON/PNG API, both served from the same app.
 
-Azimuth convention: **0° = North, 90° = East, 180° = South, 270° = West**. Since a
-roof ridge is a line, not a direction, azimuths are reported in `[0, 180)` — e.g.
-`63°` means the ridge runs along the 63°/243° line, not specifically "toward 63°".
+Azimuth convention: **0° = North, 90° = East, 180° = South, 270° = West**. The
+app first estimates the roof's *ridge* line (see "How it works" below), then
+reports the azimuth of the roof *slope* perpendicular to that ridge — a solar
+panel mounted on the roof faces along the slope, not along the ridge itself. A
+ridge has two slopes facing opposite directions; the app always reports
+whichever of the two is closer to due south (180°), the more solar-relevant
+choice in the Northern Hemisphere.
 
 ## How it works
 
 1. **Geocode** the address to coordinates (Nominatim / OpenStreetMap).
 2. **Look up the building footprint** near that point (Overpass API / OpenStreetMap
    building outlines).
-3. **Estimate the azimuth** from the footprint's longest edge — the standard
+3. **Estimate the ridge line** from the footprint's longest edge — the standard
    heuristic for gable/hip roofs, since the ridge usually runs parallel to a
    building's longest wall.
 4. Where a satellite image is fetched anyway (the picture and the image API
    endpoint, not the plain JSON endpoint), a **best-effort ridge-line detector**
    (edge + line detection on the tile) refines that estimate when it finds a
    confident, corroborated line — otherwise the footprint heuristic stands.
-5. Render a small satellite image with the footprint outline and azimuth line
+5. Render a small satellite image with the footprint outline and ridge line
    drawn on it — Belgium's national NGI orthophoto service for Belgian addresses
    (much higher resolution: ~15cm/pixel in Flanders, ~25cm/pixel in Wallonia),
    falling back to Esri World Imagery elsewhere or if NGI is unavailable.
+6. **Convert the ridge line to the reported azimuth**: rotate 90° to get the
+   roof-slope direction, then pick whichever of the two resulting compass
+   directions is closer to south. This is the number displayed and returned by
+   the API — the picture still shows the ridge line itself (step 5), not this
+   rotated value.
 
 You can also tell the app what you already know about the roof instead of relying
 on the estimate — see **Roof ridge options** below.
@@ -43,6 +53,10 @@ on the estimate — see **Roof ridge options** below.
   official GRB reference dataset) and generally good across Europe.
 - The public Overpass API instance is sometimes slow or rate-limited under load;
   the app surfaces this as a clear error rather than retrying automatically.
+- Picking "whichever slope faces closer to south" is a simplification: the
+  footprint and ridge line don't reveal which of the two slopes actually has
+  usable roof area or panels, only which one is more solar-relevant if both
+  are viable.
 
 ### Roadmap
 
@@ -73,14 +87,16 @@ This serves **both** the web UI and the API from the same port (default
 
 ## Web UI
 
-Open the app, enter an address, and optionally set **Roof ridge**:
+Open the app, enter an address, and optionally set **Roof ridge**. These options
+describe the *ridge*, not the reported azimuth directly — the displayed number
+is always the perpendicular, south-preferring conversion described above:
 
-| Option | Effect |
+| Option | Effect on the estimated ridge |
 |---|---|
-| **Ridge detection** (default) | Footprint-edge azimuth, refined by image-based ridge detection when confident. |
-| **Ridge along the long side** | Forces the footprint-heuristic value as-is (no rotation). |
-| **Ridge along the short side** | Forces the footprint-heuristic value rotated 90°. |
-| **Flat roof** | Footprint-heuristic value, but skips ridge detection entirely (there's nothing to detect). |
+| **Ridge detection** (default) | Footprint-edge ridge, refined by image-based ridge detection when confident. |
+| **Ridge along the long side** | Forces the footprint-heuristic ridge as-is (no rotation). |
+| **Ridge along the short side** | Forces the footprint-heuristic ridge rotated 90°. |
+| **Flat roof** | Footprint-heuristic ridge, but skips ridge detection entirely (there's nothing to detect). |
 
 A manual choice always wins over automatic detection — it reflects what you
 actually know about the building.
@@ -115,21 +131,25 @@ curl -G "http://localhost:8501/api/azimuth" \
   "resolved_address": "Stadhuis Antwerpen, 1, Grote Markt, ..., Antwerpen, ..., 2000, België / Belgique / Belgien",
   "lat": 51.2213112,
   "lon": 4.3991737,
-  "azimuth_deg": 20.37,
+  "azimuth_deg": 110.37,
   "roof_orientation_hint": null,
   "azimuths": [
-    {"azimuth_deg": 20.35, "length_fraction": 0.697},
-    {"azimuth_deg": 111.21, "length_fraction": 0.303}
+    {"azimuth_deg": 110.35, "length_fraction": 0.697},
+    {"azimuth_deg": 201.21, "length_fraction": 0.303}
   ]
 }
 ```
 
 Field notes:
-- `azimuth_deg` — the primary azimuth, `[0, 180)`.
+- `azimuth_deg` — the roof-slope-facing azimuth, full compass range `[0, 360)`:
+  the estimated ridge (see "How it works") rotated 90° to the slope direction,
+  resolved to whichever of the two possible directions is closer to south.
 - `roof_orientation_hint` — `"along"`, `"across"`, or `"flat"` if `roof_orientation`
-  was supplied and applied; otherwise `null`.
+  was supplied and applied; otherwise `null`. Describes what was done to the
+  *ridge* estimate, not the reported azimuth directly (see "Web UI" above).
 - `azimuths` — every footprint edge direction grouped by similar bearing, each
-  with its share of the total perimeter (`length_fraction`). Useful for complex
+  already converted the same way (rotated 90°, resolved toward south), with its
+  share of the total perimeter (`length_fraction`). Useful for complex
   footprints with more than one significant wall direction; `azimuth_deg` above
   is just the top entry (or the manual override, if given).
 
@@ -143,12 +163,14 @@ curl -G "http://localhost:8501/api/azimuth" \
 
 ### `GET /api/azimuth/image` — PNG
 
-Returns a satellite image (`image/png`) with the footprint outline and azimuth
-line drawn on it. This endpoint *does* fetch imagery and *does* attempt ridge
-detection when no `roof_orientation` override is given, so its picture (and the
-azimuth it draws) can occasionally differ slightly from the plain JSON
-endpoint's `azimuth_deg` for the same address — the JSON endpoint stays fast by
-skipping that step.
+Returns a satellite image (`image/png`) with the footprint outline and the
+estimated *ridge* line drawn on it (not the reported azimuth directly — see
+"How it works" above for why those differ by 90°). This endpoint *does* fetch
+imagery and *does* attempt ridge detection when no `roof_orientation` override
+is given, so its underlying ridge estimate (and therefore the JSON endpoint's
+equivalent `azimuth_deg`, if you called it for the same address) can
+occasionally differ slightly from the plain JSON endpoint's — which stays fast
+by skipping imagery and ridge detection entirely.
 
 Same query parameters as above (`address` required, `roof_orientation` optional).
 
@@ -189,7 +211,7 @@ azimuth/
   ridge.py              Image-based ridge-line detection (best-effort refinement)
   imagery.py             Satellite tile fetch + stitch (Esri World Imagery)
   wms.py                  Higher-res Belgian orthophoto (NGI WMS), preferred in-region
-  render.py               Draws the footprint outline + azimuth line
+  render.py               Draws the footprint outline + ridge line
   pipeline.py              Orchestrates the above, with caching
   api.py                    Starlette routes for the JSON/PNG API
 ```

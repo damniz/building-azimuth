@@ -3,6 +3,7 @@ import streamlit as st
 from azimuth.footprint import FootprintNotFoundError
 from azimuth.geocode import GeocodeError
 from azimuth.imagery import ImageryError
+from azimuth.orientation import to_directional_azimuth
 from azimuth.pipeline import compute_building_azimuth
 
 st.set_page_config(page_title="Building azimuth", page_icon=":material/explore:")
@@ -43,8 +44,8 @@ if submitted:
         else:
             st.success(f"Found: {result.display_name}")
 
-            primary_deg = result.primary.bearing_deg
-            st.metric("Roof azimuth", f"{primary_deg:.0f}°")
+            solar_azimuth_deg = to_directional_azimuth(result.primary.bearing_deg)
+            st.metric("Roof azimuth", f"{solar_azimuth_deg:.0f}°")
             if result.roof_orientation_hint == "across":
                 st.caption("Adjusted: ridge set to run along the shorter side.")
             elif result.roof_orientation_hint == "along":

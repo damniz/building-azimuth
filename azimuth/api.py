@@ -15,6 +15,7 @@ from starlette.routing import Route
 from .footprint import FootprintNotFoundError
 from .geocode import GeocodeError
 from .imagery import ImageryError
+from .orientation import to_directional_azimuth
 from .pipeline import compute_building_azimuth, compute_orientation
 
 
@@ -40,10 +41,13 @@ def get_azimuth(request: Request) -> JSONResponse:
             "resolved_address": result.display_name,
             "lat": result.lat,
             "lon": result.lon,
-            "azimuth_deg": result.primary.bearing_deg,
+            "azimuth_deg": to_directional_azimuth(result.primary.bearing_deg),
             "roof_orientation_hint": result.roof_orientation_hint,
             "azimuths": [
-                {"azimuth_deg": group.bearing_deg, "length_fraction": group.length_fraction}
+                {
+                    "azimuth_deg": to_directional_azimuth(group.bearing_deg),
+                    "length_fraction": group.length_fraction,
+                }
                 for group in result.groups
             ],
         }
