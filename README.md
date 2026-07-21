@@ -51,8 +51,14 @@ on the estimate — see **Roof ridge options** below.
 - OpenStreetMap building-footprint coverage and accuracy varies by region. It's
   particularly strong in Belgium (Flanders' buildings were bulk-imported from the
   official GRB reference dataset) and generally good across Europe.
-- The public Overpass API instance is sometimes slow or rate-limited under load;
-  the app surfaces this as a clear error rather than retrying automatically.
+- The public Overpass API instances are sometimes slow, rate-limited, or fully
+  down under load — observed repeatedly during development, including two of
+  the three default instances being down at once. Footprint lookups fall back
+  through a short list of independent instances (main → private.coffee →
+  maps.mail.ru), each getting exactly one attempt (no retries against a
+  struggling instance, which would just add etiquette-violating load without
+  helping) — but if all three are down simultaneously, the app still surfaces
+  a clear error rather than hanging indefinitely.
 - Picking "whichever slope faces closer to south" is a simplification: the
   footprint and ridge line don't reveal which of the two slopes actually has
   usable roof area or panels, only which one is more solar-relevant if both
@@ -71,12 +77,11 @@ on the estimate — see **Roof ridge options** below.
   different signal (e.g. LIDAR-derived elevation data, where a ridge is
   literally the local height maximum rather than an inferred color/shadow
   edge), or improving the footprint-edge fallback heuristic itself.
-- **TODO: reduce timeouts from `https://overpass-api.de/api/interpreter`.**
-  The public instance was frequently slow, rate-limited, or fully down during
-  development, which surfaces to users as a 404/504 error rather than a
-  result. Worth exploring: a fallback mirror (e.g. `overpass.kumi.systems`),
-  a self-hosted Overpass instance, or a different footprint data source
-  entirely for better reliability.
+- ~~Reduce timeouts from `overpass-api.de`~~ — done: footprint lookups now
+  fall back through multiple independent Overpass instances (see "Known
+  limitations"). Residual risk: all instances down at once, which would need
+  a self-hosted instance or a different footprint data source entirely to
+  fully rule out.
 
 ## Setup
 

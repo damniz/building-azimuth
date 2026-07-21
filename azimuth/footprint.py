@@ -6,10 +6,17 @@ Europe) rather than branching per country -- Flanders' OSM buildings in
 particular were bulk-imported from the official GRB reference dataset, so
 they're cadastral-grade there, and coverage elsewhere in the region is
 reasonable too.
+
+The main public instance (`overpass-api.de`) is frequently slow, rate-limited,
+or fully down (observed repeatedly during development, not a one-off). Rather
+than retrying the same struggling instance -- which is both unlikely to help
+and against Overpass's usage etiquette -- queries fall back through a short
+list of independent public instances, each getting exactly one attempt.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import requests
@@ -17,6 +24,17 @@ import requests
 from . import geometry
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+# private.coffee is FOSSGIS-adjacent (well-maintained, no rate limits per the
+# OSM wiki) but shares enough infrastructure lineage with the main instance
+# that both have been observed down at the same time. maps.mail.ru is on
+# genuinely independent infrastructure, which is exactly what makes it a
+# useful last resort when the others are having a bad day.
+DEFAULT_OVERPASS_URLS: tuple[str, ...] = (
+    OVERPASS_URL,
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+)
 
 # Overpass `around:R` measures to the nearest point of an element's geometry,
 # not its centroid -- for a large building with the address point mid-footprint,
@@ -37,32 +55,47 @@ class Footprint:
     tags: dict[str, str]
 
 
+def _query_overpass(
+    query: str, user_agent: str, overpass_urls: Sequence[str], timeout: float
+) -> dict:
+    """POST `query` to each URL in `overpass_urls` in turn, returning the first
+    successful JSON response. Each URL gets exactly one attempt -- no retries
+    against a single instance (etiquette: don't hammer a struggling server).
+    """
+    last_error: Exception | None = None
+    for url in overpass_urls:
+        try:
+            response = requests.post(
+                url,
+                data={"data": query},
+                headers={"User-Agent": user_agent},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as exc:
+            last_error = exc
+            continue
+
+    raise FootprintNotFoundError(
+        f"Could not reach any building-footprint service (tried {len(overpass_urls)}): {last_error}"
+    )
+
+
 def fetch_candidate_buildings(
     lat: float,
     lon: float,
     radius_m: int,
     user_agent: str,
-    overpass_url: str = OVERPASS_URL,
-    timeout: float = 25.0,
+    overpass_urls: Sequence[str] = DEFAULT_OVERPASS_URLS,
+    timeout: float = 12.0,
 ) -> list[Footprint]:
     query = (
         f"[out:json][timeout:{int(timeout)}];"
         f'(way["building"](around:{radius_m},{lat},{lon}););'
         "out geom;"
     )
-    try:
-        response = requests.post(
-            overpass_url,
-            data={"data": query},
-            headers={"User-Agent": user_agent},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except requests.RequestException as exc:
-        raise FootprintNotFoundError(
-            f"Could not reach the building-footprint service: {exc}"
-        ) from exc
+    payload = _query_overpass(query, user_agent, overpass_urls, timeout)
 
     candidates: list[Footprint] = []
     for element in payload.get("elements", []):
@@ -121,15 +154,15 @@ def find_building(
     lat: float,
     lon: float,
     user_agent: str,
-    overpass_url: str = OVERPASS_URL,
-    timeout: float = 25.0,
+    overpass_urls: Sequence[str] = DEFAULT_OVERPASS_URLS,
+    timeout: float = 12.0,
 ) -> Footprint:
     candidates = fetch_candidate_buildings(
-        lat, lon, _INITIAL_RADIUS_M, user_agent, overpass_url, timeout
+        lat, lon, _INITIAL_RADIUS_M, user_agent, overpass_urls, timeout
     )
     if not candidates:
         candidates = fetch_candidate_buildings(
-            lat, lon, _FALLBACK_RADIUS_M, user_agent, overpass_url, timeout
+            lat, lon, _FALLBACK_RADIUS_M, user_agent, overpass_urls, timeout
         )
     if not candidates:
         raise FootprintNotFoundError(

@@ -25,9 +25,10 @@ There is no automated test suite yet. Verification during development has been a
 - **End-to-end**: run the server, then hit the API directly, e.g.
   `curl -G "http://localhost:8501/api/azimuth" --data-urlencode "address=..."` and
   `curl -G "http://localhost:8501/api/azimuth/image" --data-urlencode "address=..." -o out.png`.
-- If Overpass's main instance (`overpass-api.de`) is down, `azimuth.footprint.find_building(..., overpass_url=...)`
-  accepts an alternate endpoint (e.g. `https://overpass.kumi.systems/api/interpreter`) for one-off testing —
-  don't switch the app's default without reason, per the etiquette note in the README.
+- `azimuth.footprint.find_building`/`fetch_candidate_buildings` already fall back through
+  `DEFAULT_OVERPASS_URLS` (main instance → private.coffee → maps.mail.ru, one attempt each) since the main
+  instance being down is routine, not exceptional. For one-off testing against a single specific instance,
+  pass `overpass_urls=[...]` with just that URL.
 - After editing any module imported by `azimuth/api.py` or `asgi_app.py` (not the Streamlit script itself), the
   running server process must be **restarted** to pick up the change — Streamlit's autoreload re-executes the
   top-level script on each rerun, but custom ASGI routes are bound once at process start and don't get that
