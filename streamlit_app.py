@@ -8,7 +8,6 @@ from azimuth.pipeline import compute_building_azimuth
 
 st.set_page_config(page_title="Building azimuth", page_icon=":material/explore:")
 
-st.title("Building azimuth")
 st.write("Enter an address to find the main orientation of the building's roof.")
 
 _ORIENTATION_OPTIONS = {
@@ -52,8 +51,14 @@ if submitted:
                 st.caption("Confirmed: ridge set to run along the longer side.")
             elif result.roof_orientation_hint == "flat":
                 st.caption("Flat roof: azimuth estimated from the building's footprint shape.")
-            elif result.ridge_detected:
-                st.caption("Detected from a visible roof ridge line in the image.")
+            else:
+                if result.ridge_detected:
+                    st.caption("Detected from a visible roof ridge line in the image.")
+                st.info(
+                    "This is an automatic estimate. If it looks visibly wrong, set the "
+                    "ridge direction manually with the Roof ridge options above and try again.",
+                    icon=":material/info:",
+                )
 
             st.image(result.image, width="stretch")
             if result.image_attribution:
