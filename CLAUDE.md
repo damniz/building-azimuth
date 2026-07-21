@@ -25,15 +25,32 @@ There is no automated test suite yet. Verification during development has been a
 - **End-to-end**: run the server, then hit the API directly, e.g.
   `curl -G "http://localhost:8501/api/azimuth" --data-urlencode "address=..."` and
   `curl -G "http://localhost:8501/api/azimuth/image" --data-urlencode "address=..." -o out.png`.
-- If Overpass's main instance (`overpass-api.de`) is down, `azimuth.footprint.find_building(..., overpass_url=...)`
-  accepts an alternate endpoint (e.g. `https://overpass.kumi.systems/api/interpreter`) for one-off testing —
-  don't switch the app's default without reason, per the etiquette note in the README.
+- `azimuth.footprint.find_building`/`fetch_candidate_buildings` already fall back through
+  `DEFAULT_OVERPASS_URLS` (main instance → private.coffee → maps.mail.ru, one attempt each) since the main
+  instance being down is routine, not exceptional. For one-off testing against a single specific instance,
+  pass `overpass_urls=[...]` with just that URL.
 - After editing any module imported by `azimuth/api.py` or `asgi_app.py` (not the Streamlit script itself), the
   running server process must be **restarted** to pick up the change — Streamlit's autoreload re-executes the
   top-level script on each rerun, but custom ASGI routes are bound once at process start and don't get that
   treatment.
 
 ## Architecture
+
+```
+streamlit_app.py     Streamlit UI (thin script, calls azimuth.pipeline)
+asgi_app.py           ASGI entry point: mounts the UI + API routes (st.App)
+azimuth/
+  geocode.py          Address -> coordinates (Nominatim)
+  footprint.py        Coordinates -> building footprint (Overpass/OSM)
+  geometry.py          Shared planar-geometry primitives
+  orientation.py       Footprint -> azimuth (edge bearings, grouping, manual override)
+  ridge.py              Image-based ridge-line detection (best-effort refinement)
+  imagery.py             Satellite tile fetch + stitch (Esri World Imagery)
+  wms.py                  Higher-res Belgian orthophoto (NGI WMS), preferred in-region
+  render.py               Draws the footprint outline + ridge line
+  pipeline.py              Orchestrates the above, with caching
+  api.py                    Starlette routes for the JSON/PNG API
+```
 
 **Two surfaces, one pipeline.** `streamlit_app.py` (the UI) and `azimuth/api.py` (JSON/PNG routes) are both thin
 callers of `azimuth/pipeline.py`, mounted together by `asgi_app.py` via `st.App(routes=..., exception_handlers=...)`.

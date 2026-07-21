@@ -14,24 +14,14 @@ choice in the Northern Hemisphere.
 
 ## How it works
 
-1. **Geocode** the address to coordinates (Nominatim / OpenStreetMap).
-2. **Look up the building footprint** near that point (Overpass API / OpenStreetMap
-   building outlines).
-3. **Estimate the ridge line** from the footprint's longest edge — the standard
-   heuristic for gable/hip roofs, since the ridge usually runs parallel to a
-   building's longest wall.
-4. Where a satellite image is fetched anyway (the picture and the image API
-   endpoint, not the plain JSON endpoint), a **best-effort ridge-line detector**
-   (edge + line detection on the tile) refines that estimate when it finds a
-   confident, corroborated line — otherwise the footprint heuristic stands.
-5. Render a small satellite image with the footprint outline and ridge line
-   drawn on it — Belgium's national NGI orthophoto service for Belgian addresses
-   (much higher resolution: ~15cm/pixel in Flanders, ~25cm/pixel in Wallonia),
-   falling back to Esri World Imagery elsewhere or if NGI is unavailable.
-6. **Convert the ridge line to the reported azimuth**: rotate 90° to get the
-   roof-slope direction, then pick whichever of the two resulting compass
-   directions is closer to south. This is the number displayed and returned by
-   the API — the picture still shows the ridge line itself (step 5), not this
+1. **Geocode** the address to coordinates (OpenStreetMap).
+2. **Look up the building footprint** near that point (OpenStreetMap).
+3. **Estimate the roof ridge** from the footprint's longest edge, refined by
+   image-based ridge detection when a satellite image is fetched (the picture
+   and the image API endpoint; the plain JSON endpoint skips this for speed).
+4. **Convert the ridge to the reported azimuth**: rotate 90° to the roof-slope
+   direction, then pick whichever of the two resulting compass directions is
+   closer to south. The picture always shows the ridge itself, not this
    rotated value.
 
 You can also tell the app what you already know about the roof instead of relying
@@ -42,17 +32,14 @@ on the estimate — see **Roof ridge options** below.
 - The footprint-edge heuristic is an approximation. It's wrong whenever a roof's
   ridge doesn't run along the building's longest wall (common for e.g. some
   terraced/row houses) — use the manual override in that case.
-- Ridge-line detection runs on whatever satellite imagery was fetched. For
-  Belgian addresses that's NGI's orthophoto service (~15–25 cm/pixel); Esri's
-  imagery elsewhere is typically ~0.3–1 m/pixel. Small residential roofs are
-  only a few dozen pixels wide even at the better resolution, so detection is
-  intentionally conservative and will often find nothing (falling back to the
-  footprint heuristic) rather than guess.
-- OpenStreetMap building-footprint coverage and accuracy varies by region. It's
-  particularly strong in Belgium (Flanders' buildings were bulk-imported from the
-  official GRB reference dataset) and generally good across Europe.
-- The public Overpass API instance is sometimes slow or rate-limited under load;
-  the app surfaces this as a clear error rather than retrying automatically.
+- Ridge-line detection is best-effort and often finds nothing on typical small
+  roofs, especially outside Belgium where satellite imagery is lower
+  resolution — it falls back to the footprint heuristic rather than guess.
+- Building-footprint coverage and accuracy varies by region, though it's
+  generally good across Europe and particularly strong in Belgium.
+- Underlying map-data services are occasionally slow or unavailable; the app
+  automatically retries against alternative sources where possible, but if all
+  are down you'll see a clear error rather than a result.
 - Picking "whichever slope faces closer to south" is a simplification: the
   footprint and ridge line don't reveal which of the two slopes actually has
   usable roof area or panels, only which one is more solar-relevant if both
@@ -60,23 +47,11 @@ on the estimate — see **Roof ridge options** below.
 
 ### Roadmap
 
-- For complex buildings, each `azimuths` group (see the API response below)
-  already carries a bearing and a share of the building's perimeter — the
-  groundwork for reporting multiple azimuths with roof-area fractions, not
-  just the single dominant one.
-- **TODO: improve ridge detection and orientation estimation.** Even with the
-  higher-resolution Belgian NGI imagery, `ridge.py`'s Canny/Hough approach
-  remains best-effort and often finds nothing on typical small roofs (see
-  "Known limitations"). Worth exploring: better CV tuning, a genuinely
-  different signal (e.g. LIDAR-derived elevation data, where a ridge is
-  literally the local height maximum rather than an inferred color/shadow
-  edge), or improving the footprint-edge fallback heuristic itself.
-- **TODO: reduce timeouts from `https://overpass-api.de/api/interpreter`.**
-  The public instance was frequently slow, rate-limited, or fully down during
-  development, which surfaces to users as a 404/504 error rather than a
-  result. Worth exploring: a fallback mirror (e.g. `overpass.kumi.systems`),
-  a self-hosted Overpass instance, or a different footprint data source
-  entirely for better reliability.
+- Report multiple azimuths with roof-area fractions for complex buildings,
+  not just the single dominant one (the API's `azimuths` field already has
+  the groundwork for this).
+- Improve ridge detection and orientation estimation — still best-effort and
+  often finds nothing on typical small roofs.
 
 ## Setup
 
@@ -178,12 +153,10 @@ curl -G "http://localhost:8501/api/azimuth" \
 
 Returns a satellite image (`image/png`) with the footprint outline and the
 estimated *ridge* line drawn on it (not the reported azimuth directly — see
-"How it works" above for why those differ by 90°). This endpoint *does* fetch
-imagery and *does* attempt ridge detection when no `roof_orientation` override
-is given, so its underlying ridge estimate (and therefore the JSON endpoint's
-equivalent `azimuth_deg`, if you called it for the same address) can
-occasionally differ slightly from the plain JSON endpoint's — which stays fast
-by skipping imagery and ridge detection entirely.
+"How it works" above for why those differ by 90°). This endpoint attempts
+ridge detection when no `roof_orientation` override is given, so its result
+can occasionally differ slightly from the plain JSON endpoint's for the same
+address.
 
 Same query parameters as above (`address` required, `roof_orientation` optional).
 
@@ -205,29 +178,9 @@ Errors are JSON: `{"error": "..."}`, with a status code indicating the cause:
 
 ### Rate limits and etiquette
 
-Every request geocodes via Nominatim and queries Overpass — both are free, public
-OpenStreetMap services with usage policies (roughly: identify your app, don't
-hammer them with retries or bulk queries). Results are cached server-side for 24
-hours per address, so repeat lookups of the same address are effectively free.
-This app is sized for personal/low-volume use, not bulk querying.
-
-## Project layout
-
-```
-streamlit_app.py     Streamlit UI (thin script, calls azimuth.pipeline)
-asgi_app.py           ASGI entry point: mounts the UI + API routes (st.App)
-azimuth/
-  geocode.py          Address -> coordinates (Nominatim)
-  footprint.py        Coordinates -> building footprint (Overpass/OSM)
-  geometry.py          Shared planar-geometry primitives
-  orientation.py       Footprint -> azimuth (edge bearings, grouping, manual override)
-  ridge.py              Image-based ridge-line detection (best-effort refinement)
-  imagery.py             Satellite tile fetch + stitch (Esri World Imagery)
-  wms.py                  Higher-res Belgian orthophoto (NGI WMS), preferred in-region
-  render.py               Draws the footprint outline + ridge line
-  pipeline.py              Orchestrates the above, with caching
-  api.py                    Starlette routes for the JSON/PNG API
-```
+Results are cached server-side for 24 hours per address, so repeat lookups of
+the same address are effectively free. This app is sized for personal/
+low-volume use, not bulk querying.
 
 ## Attribution
 
