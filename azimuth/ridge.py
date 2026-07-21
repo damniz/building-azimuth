@@ -2,15 +2,25 @@
 the footprint-edge azimuth heuristic.
 
 This is fundamentally different from the rest of the app's geometry: it's
-computer vision on a low-resolution satellite tile (roughly 0.3-1m/pixel at
-the zoom levels imagery.py fetches), not a deterministic calculation on OSM
-polygon data. A typical small residential roof is only a few dozen pixels
-wide at this resolution, so detection is deliberately conservative: a
+computer vision on a satellite/orthophoto tile, not a deterministic
+calculation on OSM polygon data. Detection is deliberately conservative: a
 candidate line only counts as a ridge if it's long, roughly central to the
 footprint, and clearly distinct from the footprint's own boundary (otherwise
 Canny/Hough will just re-detect the building outline as a "ridge"). When
 nothing meets that bar, `detect_ridge_line` returns None and the caller
 should keep using the footprint-edge default.
+
+A real ridge and a coincidental same-bearing edge outside the building turn
+out to look nearly identical by pure geometry (span, segment count, how far a
+Hough-fitted endpoint overshoots the footprint) -- verified directly on a real
+false positive and a real true positive that had almost the same numbers on
+every geometric measure tried, including the false positive scoring *higher*
+on span. The signal that did separate them: a real ridge usually splits the
+roof into two differently lit/colored slopes, so the mean color on either
+side of the candidate line differs noticeably; a coincidental edge that isn't
+actually a roof feature doesn't. `_color_asymmetry` is that check, and is now
+a required gate for every candidate, not just a fallback for uncorroborated
+ones -- geometric corroboration alone was shown not to be trustworthy.
 """
 
 from __future__ import annotations
@@ -31,12 +41,14 @@ _MIN_SPAN_FRACTION = 0.45
 # A candidate's midpoint must be within this fraction of the bbox diagonal
 # from the footprint centroid -- a ridge runs roughly through the middle.
 _MAX_CENTROID_DISTANCE_FRACTION = 0.25
-# Both endpoints must be inside the footprint (plus this small pixel margin,
-# for boundary imprecision) -- not just the midpoint. A line whose midpoint
-# happens to fall inside but which exits through a corner is very likely a
-# color-boundary edge with the surroundings (a driveway, a neighbor's roof,
-# a shadow), not a ridge spanning this roof.
-_ENDPOINT_OUTSIDE_MARGIN_PX = 2.0
+# A basic sanity check, not a precise discriminator: a Hough-fitted line's
+# endpoint routinely overshoots the true footprint boundary by 15-20% of the
+# bbox diagonal even for a genuine ridge (anti-aliasing, the OSM polygon not
+# perfectly tracing the roof edge, eave overhang) -- a small fixed pixel
+# margin rejected a confirmed-correct ridge in testing. This only guards
+# against a candidate that's almost entirely outside the footprint; real
+# corroboration is `_color_asymmetry` below.
+_ENDPOINT_OUTSIDE_MARGIN_FRACTION = 0.25
 # A candidate within this many pixels of the footprint boundary, running
 # near-parallel to that boundary edge, is a re-detection of the building
 # outline, not a ridge.
@@ -45,11 +57,14 @@ _BOUNDARY_PARALLEL_TOLERANCE_DEG = 10.0
 # Candidates within this bearing tolerance (mod 180) are grouped together
 # when picking the single most-supported line.
 _GROUP_TOLERANCE_DEG = 12.0
-# A single, unconfirmed line is a weak signal at the resolution this imagery
-# is fetched at -- require either multiple independent segments agreeing, or
-# one segment spanning almost the entire footprint, before trusting it.
-_MIN_CORROBORATING_CANDIDATES = 2
-_SOLO_CANDIDATE_MIN_SPAN_FRACTION = 0.8
+# Sample points in bands on each side of a candidate line (within the
+# footprint) and compare mean RGB. Calibrated on two real examples: a
+# confirmed true ridge measured ~45, a confirmed false positive measured ~11
+# -- 20 sits with margin above the false positive and below the true one, but
+# this is only two data points, so revisit if it misfires on new examples.
+_COLOR_ASYMMETRY_BAND_PX = 6.0
+_COLOR_ASYMMETRY_SAMPLES = 15
+_MIN_COLOR_ASYMMETRY = 20.0
 
 
 @dataclass
@@ -107,7 +122,8 @@ def detect_ridge_line(image: Image.Image, ring_px: list[tuple[float, float]]) ->
         if length < min_line_length:
             continue
 
-        if not _inside_with_margin(p1, ring_px) or not _inside_with_margin(p2, ring_px):
+        margin_px = bbox_diagonal * _ENDPOINT_OUTSIDE_MARGIN_FRACTION
+        if not _inside_with_margin(p1, ring_px, margin_px) or not _inside_with_margin(p2, ring_px, margin_px):
             continue
 
         midpoint = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
@@ -123,13 +139,13 @@ def detect_ridge_line(image: Image.Image, ring_px: list[tuple[float, float]]) ->
 
     if not candidates:
         return None
-    return _pick_dominant_line(candidates, bbox_diagonal)
+    return _pick_dominant_line(candidates, bbox_diagonal, image, ring_px)
 
 
-def _inside_with_margin(pt: tuple[float, float], ring_px: list[tuple[float, float]]) -> bool:
+def _inside_with_margin(pt: tuple[float, float], ring_px: list[tuple[float, float]], margin_px: float) -> bool:
     if point_in_polygon(pt, ring_px):
         return True
-    return point_to_ring_distance(pt, ring_px) <= _ENDPOINT_OUTSIDE_MARGIN_PX
+    return point_to_ring_distance(pt, ring_px) <= margin_px
 
 
 def ridge_azimuth(line: RidgeLine, meters_per_pixel: float) -> EdgeBearing:
@@ -179,18 +195,48 @@ def _hugs_boundary(
     return False
 
 
-def _pick_dominant_line(candidates: list[RidgeLine], bbox_diagonal: float) -> RidgeLine | None:
-    # Group by similar bearing (mod 180), sum length per group, then return
-    # the single longest segment from the best-supported group -- but only
-    # if that group is actually corroborated: either multiple independent
-    # segments agree, or one segment alone spans almost the whole footprint.
-    # A single, middling-length line is exactly the failure mode observed in
-    # testing (a stray color-boundary edge coinciding with the containment
-    # checks), so it's not enough on its own.
+def _color_asymmetry(
+    image: Image.Image,
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    ring_px: list[tuple[float, float]],
+) -> float | None:
+    """Mean-color difference between the two sides of the line (p1, p2),
+    sampled only at points inside the footprint. A real ridge splits the roof
+    into two differently lit/colored slopes; a coincidental edge that isn't
+    actually a roof feature usually doesn't. Returns None if there aren't
+    enough valid samples on both sides to compare (e.g. the line runs too
+    close to the footprint boundary for a full band on one side).
+    """
+    pixels = np.asarray(image.convert("RGB"), dtype=np.float64)
+    height, width = pixels.shape[:2]
+    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+    length = math.hypot(dx, dy)
+    if length == 0:
+        return None
+    ux, uy = dx / length, dy / length
+    perp_x, perp_y = -uy, ux
+
+    sides: tuple[list, list] = ([], [])
+    for i in range(_COLOR_ASYMMETRY_SAMPLES + 1):
+        t = i / _COLOR_ASYMMETRY_SAMPLES
+        cx, cy = p1[0] + t * dx, p1[1] + t * dy
+        for side, bucket in ((1, sides[0]), (-1, sides[1])):
+            sx = cx + perp_x * _COLOR_ASYMMETRY_BAND_PX * side
+            sy = cy + perp_y * _COLOR_ASYMMETRY_BAND_PX * side
+            if 0 <= sx < width and 0 <= sy < height and point_in_polygon((sx, sy), ring_px):
+                bucket.append(pixels[int(sy), int(sx)])
+
+    left, right = sides
+    if len(left) < 3 or len(right) < 3:
+        return None
+    return float(np.linalg.norm(np.mean(left, axis=0) - np.mean(right, axis=0)))
+
+
+def _group_by_bearing(candidates: list[RidgeLine]) -> list[list[RidgeLine]]:
     remaining = sorted(candidates, key=lambda c: c.length_px, reverse=True)
     used = [False] * len(remaining)
-    best_group: list[RidgeLine] = []
-    best_total = -1.0
+    groups: list[list[RidgeLine]] = []
 
     for i, seed in enumerate(remaining):
         if used[i]:
@@ -207,12 +253,31 @@ def _pick_dominant_line(candidates: list[RidgeLine], bbox_diagonal: float) -> Ri
             if diff <= _GROUP_TOLERANCE_DEG:
                 group.append(remaining[j])
                 used[j] = True
-        total = sum(c.length_px for c in group)
-        if total > best_total:
-            best_total = total
-            best_group = group
+        groups.append(group)
+    return groups
 
-    best = max(best_group, key=lambda c: c.length_px)
-    if len(best_group) < _MIN_CORROBORATING_CANDIDATES and best.length_px < bbox_diagonal * _SOLO_CANDIDATE_MIN_SPAN_FRACTION:
-        return None
-    return best
+
+def _pick_dominant_line(
+    candidates: list[RidgeLine],
+    bbox_diagonal: float,
+    image: Image.Image,
+    ring_px: list[tuple[float, float]],
+) -> RidgeLine | None:
+    # Group by similar bearing (mod 180) -- segment count and total span were
+    # the original corroboration signals for picking *among* groups, but
+    # testing showed they don't actually separate a real ridge from a
+    # coincidental same-bearing edge outside the building (a confirmed false
+    # positive scored *higher* on span than a confirmed true positive, and
+    # two spurious edges can agree in bearing just as easily as two real
+    # ones). So: try groups in order of total supporting length, and accept
+    # the first one whose representative line shows a real color difference
+    # between its two sides (see module docstring) -- the strongest-looking
+    # group by raw geometry isn't necessarily the real ridge.
+    groups = sorted(_group_by_bearing(candidates), key=lambda g: sum(c.length_px for c in g), reverse=True)
+
+    for group in groups:
+        best = max(group, key=lambda c: c.length_px)
+        asymmetry = _color_asymmetry(image, best.start_px, best.end_px, ring_px)
+        if asymmetry is not None and asymmetry >= _MIN_COLOR_ASYMMETRY:
+            return best
+    return None
