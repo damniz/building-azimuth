@@ -32,9 +32,11 @@ on the estimate — see **Roof ridge options** below.
 - The footprint-edge heuristic is an approximation. It's wrong whenever a roof's
   ridge doesn't run along the building's longest wall (common for e.g. some
   terraced/row houses) — use the manual override in that case.
-- Ridge-line detection is best-effort and often finds nothing on typical small
-  roofs, especially outside Belgium where satellite imagery is lower
-  resolution — it falls back to the footprint heuristic rather than guess.
+- Ridge-line detection is best-effort and requires the two roof slopes to
+  actually look different in the image (a lighting or material difference
+  across the ridge) — a uniformly colored/lit roof, or low-resolution imagery,
+  can still mean nothing is found. It falls back to the footprint heuristic
+  rather than guess.
 - Building-footprint coverage and accuracy varies by region, though it's
   generally good across Europe and particularly strong in Belgium.
 - Underlying map-data services are occasionally slow or unavailable; the app
