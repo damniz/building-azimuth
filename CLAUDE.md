@@ -109,3 +109,7 @@ effect). Don't skip this step silently.
 
 At the start of a new session in this repo, check the README's "Roadmap" section for outstanding TODOs and
 proactively propose tackling one, rather than waiting to be asked.
+
+Always use the `developing-with-streamlit` skill for any work touching `streamlit_app.py` or Streamlit usage
+elsewhere in this repo (new widgets, styling, layout, performance, or `st.App`/ASGI changes) — load it before
+editing, not just when something looks visually off.
